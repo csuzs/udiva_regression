@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List
 import torch
@@ -8,7 +9,12 @@ from decord import cpu, gpu
 import h5py
 from torch import Tensor
 decord.bridge.set_bridge('torch')
-        
+
+
+@dataclass
+class Participant:
+    def __init__(self) -> None:
+        pass
 class Session:
     def __init__(self,session_ID: str, video_path: Path, annot_path: Path, metadata_path: Path ) -> None:
         self.vr = VideoReader(str(video_path))
@@ -23,6 +29,7 @@ class Session:
         
         self.face_landmarks: Tensor = torch.stack(face_landmarks_tmp)
         
+                
     
 class UDIVADataset(Dataset):
     def __init__(self,database_path: Path):
