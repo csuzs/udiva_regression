@@ -3,3 +3,5 @@ torchvision
 decord
 numpy
 scipy
+pandas
+h5py

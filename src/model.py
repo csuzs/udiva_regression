@@ -1,14 +1,13 @@
 # This is a sample Python script.
 from pathlib import Path
-from typing import List, Dict, Union
+from typing import Dict, List, Union
 
 import numpy as np
-
 import torch
-from torch import nn, Tensor
-from torchvision.models.video import r2plus1d_18, R2Plus1D_18_Weights
-from torch.nn.functional import relu
 from scipy.io.wavfile import read as read_wav
+from torch import Tensor, nn
+from torch.nn.functional import relu
+from torchvision.models.video import R2Plus1D_18_Weights, r2plus1d_18
 
 
 class VideoResnetFeatureExtractor(nn.Module):
@@ -26,19 +25,20 @@ class VideoResnetFeatureExtractor(nn.Module):
         # x has a shape of [B, C, D, H, W]
         # D = 32
 
-        x = x.permute(0,2,1,3,4)
+        x = x.permute(0, 2, 1, 3, 4)
 
         x = self.stem(x)
         x = self.vresnet_feature_network(x)
         ste_features = self.ste(x)
-        x = x.permute(0,2,3,4,1)
-        x = torch.cat([x,ste_features],dim=-1)
+        x = x.permute(0, 2, 3, 4, 1)
+        x = torch.cat([x, ste_features], dim=-1)
         return x
+
 
 class AudioProcessingNetwork(nn.Module):
     def __init__(self, requires_grad: bool, sample_rate: int):
         assert (
-                sample_rate is not None
+            sample_rate is not None
         ), "sample rate of the audio source is required for the network to proces it."
 
         super(AudioProcessingNetwork, self).__init__()
@@ -51,12 +51,16 @@ class AudioProcessingNetwork(nn.Module):
     def forward(self, audio_signal_batch: List[np.ndarray]):
         # TODO batch processing of audio chunks?
         batch_size = len(audio_signal_batch)
-        outs = [self.VGGish.forward(audio_signal, self.sample_rate) for audio_signal in audio_signal_batch]
-        out = torch.stack(outs,dim=0)
-        out = out.reshape(batch_size,-1)
+        outs = [
+            self.VGGish.forward(audio_signal, self.sample_rate)
+            for audio_signal in audio_signal_batch
+        ]
+        out = torch.stack(outs, dim=0)
+        out = out.reshape(batch_size, -1)
         out = self.fc(out)
         out = out.reshape(batch_size, 1, 1, 1, 100)
         return out
+
 
 class QueryPreprocessor(nn.Module):
     def __init__(self, embed_dim: int):
@@ -69,8 +73,8 @@ class QueryPreprocessor(nn.Module):
         self.fc = nn.Linear(in_features=6272, out_features=embed_dim)
 
     def forward(self, x: Tensor):
-        x = x.permute(0,4,1,2,3)
-        #(N, C, D, H, W)
+        x = x.permute(0, 4, 1, 2, 3)
+        # (N, C, D, H, W)
 
         x = self.maxpool3d(x)
         x = self.activation(self.conv3d(x))
@@ -91,27 +95,34 @@ class SpatioTemporalEncoder(nn.Module):
         self.spat_enc_t1 = nn.Linear(2, 20)
         self.spat_enc_t2 = nn.Linear(20, 10)
 
-        self.encs_final_shape = (16, 28, 28,10)
+        self.encs_final_shape = (16, 28, 28, 10)
 
-    def forward(self,x: Tensor):
+    def forward(self, x: Tensor):
         batch_size = x.shape[0]
         encs_final_shape = [batch_size, *self.encs_final_shape]
         spat_enc = (
-            torch.tensor([[i - 14, j - 14] for i in range(28) for j in range(28) for b in range(batch_size)])
+            torch.tensor(
+                [
+                    [i - 14, j - 14]
+                    for i in range(28)
+                    for j in range(28)
+                    for b in range(batch_size)
+                ]
+            )
             .view(28 * 28, 2)
-            .to(device=x.device,dtype=torch.float32)
+            .to(device=x.device, dtype=torch.float32)
         )
         temp_enc = torch.arange(-8, 8, 1).view(16, 1).to(torch.float32)
-        temp_enc = torch.stack(batch_size*[temp_enc])
+        temp_enc = torch.stack(batch_size * [temp_enc])
 
         temp_enc = nn.functional.relu(self.temp_enc_t1(temp_enc))
         temp_enc = nn.functional.relu(self.temp_enc_t2(temp_enc))
 
-        temp_enc = temp_enc[:,:,None,None,:].expand(encs_final_shape)
+        temp_enc = temp_enc[:, :, None, None, :].expand(encs_final_shape)
 
         spat_enc = nn.functional.relu(self.spat_enc_t1(spat_enc))
         spat_enc = nn.functional.relu(self.spat_enc_t2(spat_enc))
-        spat_enc = spat_enc.reshape(batch_size,1, 28, 28, 10).expand(encs_final_shape)
+        spat_enc = spat_enc.reshape(batch_size, 1, 28, 28, 10).expand(encs_final_shape)
 
         encodings = torch.concat([spat_enc, temp_enc], dim=-1)
 
@@ -127,8 +138,13 @@ class TxUnit(nn.Module):
         self.embed_dim = embed_dim
         self.key_embed_dim = key_embed_dim
         self.value_embed_dim = value_embed_dim
-        self.MHA = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=2, kdim=key_embed_dim, vdim=value_embed_dim,
-                                         batch_first=True)
+        self.MHA = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=2,
+            kdim=key_embed_dim,
+            vdim=value_embed_dim,
+            batch_first=True,
+        )
         self.dropout1 = nn.Dropout(0.5)
         self.layernorm1 = nn.LayerNorm([1, 128])
         self.fc1 = nn.Linear(128, 512)
@@ -179,17 +195,26 @@ class TxQueryPreprocessor(nn.Module):
 
 
 class TxLayer(nn.Module):
-    def __init__(self, num_units: int, embed_dim: int, key_embed_dim: int, value_embed_dim: int):
+    def __init__(
+        self, num_units: int, embed_dim: int, key_embed_dim: int, value_embed_dim: int
+    ):
         super(TxLayer, self).__init__()
 
         self.tx_units: List[TxUnit] = [
-            TxUnit(embed_dim=embed_dim, key_embed_dim=key_embed_dim, value_embed_dim=value_embed_dim) for _ in
-            range(0, num_units)]
+            TxUnit(
+                embed_dim=embed_dim,
+                key_embed_dim=key_embed_dim,
+                value_embed_dim=value_embed_dim,
+            )
+            for _ in range(0, num_units)
+        ]
         self.fc = nn.Linear(num_units * embed_dim, embed_dim)
 
     def forward(self, query: Tensor, keys: List[Tensor], values: List[Tensor]):
-        updated_queries: List[Tensor] = [tx_unit.forward(query, key, value) for tx_unit, key, value in
-                                         zip(self.tx_units, keys, values)]
+        updated_queries: List[Tensor] = [
+            tx_unit.forward(query, key, value)
+            for tx_unit, key, value in zip(self.tx_units, keys, values)
+        ]
         updated_queries_ten: Tensor = torch.concat(updated_queries, dim=-1)
 
         updated_query = nn.functional.relu(self.fc(updated_queries_ten))
@@ -197,14 +222,23 @@ class TxLayer(nn.Module):
 
 
 class ActionTransformer(nn.Module):
-    def __init__(self, num_units: int, embed_dim: int, key_embed_dim: int, value_embed_dim: int):
+    def __init__(
+        self, num_units: int, embed_dim: int, key_embed_dim: int, value_embed_dim: int
+    ):
         super(ActionTransformer, self).__init__()
         self.num_units = num_units
         self.embed_dim = embed_dim
         self.key_embed_dim = key_embed_dim
         self.value_embed_dim = value_embed_dim
-        self.tx_layers: List[TxLayer] = [TxLayer(num_units=num_units, embed_dim=embed_dim, key_embed_dim=key_embed_dim,
-                                                 value_embed_dim=value_embed_dim) for _ in range(0, num_units, 1)]
+        self.tx_layers: List[TxLayer] = [
+            TxLayer(
+                num_units=num_units,
+                embed_dim=embed_dim,
+                key_embed_dim=key_embed_dim,
+                value_embed_dim=value_embed_dim,
+            )
+            for _ in range(0, num_units, 1)
+        ]
 
     def forward(self, query: Tensor, keys: List[Tensor], values: List[Tensor]):
         for tx_layer in self.tx_layers:
@@ -214,23 +248,40 @@ class ActionTransformer(nn.Module):
 
 
 class OCEANRegressor(nn.Module):
-    def __init__(self, embed_dim: int, tx_layer_units: int, other_interlocutor: bool = False):
+    def __init__(
+        self, embed_dim: int, tx_layer_units: int, other_interlocutor: bool = False
+    ):
         super(OCEANRegressor, self).__init__()
         self.audio_feature_dim = 100
         self.embed_dim = embed_dim
         self.num_classes = 5
-        self.head: nn.Module = nn.Linear(in_features=embed_dim, out_features=self.num_classes)
-        self.audio_feat_extractor: nn.Module = AudioProcessingNetwork(requires_grad=True, sample_rate=44100)
+        self.head: nn.Module = nn.Linear(
+            in_features=embed_dim, out_features=self.num_classes
+        )
+        self.audio_feat_extractor: nn.Module = AudioProcessingNetwork(
+            requires_grad=True, sample_rate=44100
+        )
         self.query_preproc: nn.Module = QueryPreprocessor(embed_dim=embed_dim)
-        self.tx_query_preproc: nn.Module = TxQueryPreprocessor(in_features=148,embed_dim=128)
-        self.tx_key_value_preprocessor: nn.Module = TxKeyValPreprocessor(embed_dim, k_input_dim=embed_dim + 20 + self.audio_feature_dim ,
-                                                                         v_input_dim=embed_dim + 20 + self.audio_feature_dim )
+        self.tx_query_preproc: nn.Module = TxQueryPreprocessor(
+            in_features=148, embed_dim=128
+        )
+        self.tx_key_value_preprocessor: nn.Module = TxKeyValPreprocessor(
+            embed_dim,
+            k_input_dim=embed_dim + 20 + self.audio_feature_dim,
+            v_input_dim=embed_dim + 20 + self.audio_feature_dim,
+        )
         self.video_feat_extractor: nn.Module = VideoResnetFeatureExtractor()
         self.face_features_extractor: nn.Module = VideoResnetFeatureExtractor()
-        self.action_transformer: ActionTransformer = ActionTransformer(num_units=tx_layer_units, embed_dim=embed_dim,
-                                                                       key_embed_dim=embed_dim,
-                                                                       value_embed_dim=embed_dim)
-    def create_dummy_input(self,example_wav_path: Path) -> Dict[str,Union[Tensor,np.ndarray]]:
+        self.action_transformer: ActionTransformer = ActionTransformer(
+            num_units=tx_layer_units,
+            embed_dim=embed_dim,
+            key_embed_dim=embed_dim,
+            value_embed_dim=embed_dim,
+        )
+
+    def create_dummy_input(
+        self, example_wav_path: Path
+    ) -> Dict[str, Union[Tensor, np.ndarray]]:
         wf = read_wav(str(example_wav_path))
         wavenp = np.array(wf[1], dtype=float)
         sample_rate = wf[0]
@@ -241,7 +292,7 @@ class OCEANRegressor(nn.Module):
             "local_metadata": torch.ones((1, 20)),
             "audio_chunks": wavenp,
             "face_chunks": torch.ones((1, 32, 3, 112, 112)),
-            "local_context_chunks": torch.ones((1, 32, 3, 112, 112))
+            "local_context_chunks": torch.ones((1, 32, 3, 112, 112)),
         }
         return input_dict
 
@@ -259,7 +310,7 @@ class OCEANRegressor(nn.Module):
         face_features = self.face_features_extractor(input_tensors["face_chunks"])
         preprocessed_query = self.query_preproc(face_features)
         preprocessed_query = preprocessed_query
-        preprocessed_query = self.tx_query_preproc.forward(preprocessed_query,l_mtdt)
+        preprocessed_query = self.tx_query_preproc.forward(preprocessed_query, l_mtdt)
         #
 
         # Video chunks processing
@@ -272,7 +323,6 @@ class OCEANRegressor(nn.Module):
         ocean_scores = self.head(transformer_out)
 
         return ocean_scores
-
 
 
 if __name__ == "__main__":
@@ -335,7 +385,7 @@ if __name__ == "__main__":
         "local_metadata": torch.ones((1, 20)),
         "audio_chunks": wavenp,
         "face_chunks": torch.ones((1, 32, 3, 112, 112)),
-        "local_context_chunks": torch.ones((1, 32, 3,112, 112))
+        "local_context_chunks": torch.ones((1, 32, 3, 112, 112)),
     }
-    
+
     out = ocean_regressor(input_dict)
